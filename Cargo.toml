@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-creusot-contracts = { rev = "ae1d95691508d524a0c58e876672e89860f02d48", git = "https://github.com/xldenis/creusot" }
+creusot-contracts = { rev = "fbd66041acf5a3f2480c4cc75be024e2f99b0bb7", git = "https://github.com/xldenis/creusot" }
 
 [features]
 default=["contracts"]
