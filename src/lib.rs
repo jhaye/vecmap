@@ -38,68 +38,36 @@ pub struct VecMap<K, V>
 where
     K: Eq + Ord,
 {
-    v: Vec<VecMapItem<K, V>>,
+    v: Vec<(K, V)>,
 }
 
-#[derive(Copy, Clone)]
-#[cfg_attr(not(feature = "contracts"), derive(Debug))]
-struct VecMapItem<K, V>
-where
-    K: Eq + Ord,
-{
-    key: K,
-    value: V,
-}
-
-#[cfg(feature = "contracts")]
-impl<K, V> DeepModel for VecMapItem<K, V>
+impl<K, V> VecMap<K, V>
 where
     K: Eq + Ord + DeepModel,
+    K::DeepModelTy: OrdLogic,
 {
-    type DeepModelTy = K::DeepModelTy;
-
     #[logic]
-    fn deep_model(self) -> Self::DeepModelTy {
-        pearlite! { self.key.deep_model() }
+    #[trusted]
+    #[ensures(result.len() == (@self.v).len() &&
+              forall<i: Int> i >= 0 && i < (@self.v).len() ==>
+              result[i] == (@self.v)[i].0.deep_model())]
+    fn key_seq(self) -> Seq<K::DeepModelTy> {
+        pearlite! { absurd }
     }
-}
 
-impl<K, V> PartialEq for VecMapItem<K, V>
-where
-    K: Ord + Eq + DeepModel,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key
-    }
-}
-
-impl<K, V> Eq for VecMapItem<K, V> where K: Eq + Ord + DeepModel {}
-
-impl<K, V> Ord for VecMapItem<K, V>
-where
-    K: Eq + Ord + DeepModel,
-    K::DeepModelTy: OrdLogic,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.key.cmp(&other.key)
-    }
-}
-
-impl<K, V> PartialOrd for VecMapItem<K, V>
-where
-    K: Eq + Ord + DeepModel,
-    K::DeepModelTy: OrdLogic,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    #[predicate]
+    fn is_sorted(self) -> bool {
+        pearlite! {
+            forall<m: Int, n: Int> m >= 0 && n >= 0 && m < (@self.v).len() && n < (@self.v).len() && m < n ==>
+                self.key_seq()[m] < self.key_seq()[n]
+        }
     }
 }
 
 impl<K, V> VecMap<K, V>
 where
-    K: Eq + Ord + Clone + DeepModel,
+    K: Eq + Ord + DeepModel,
     K::DeepModelTy: OrdLogic,
-    V: Default,
 {
     pub fn new() -> Self {
         Self { v: Vec::new() }
@@ -107,6 +75,14 @@ where
 
     /// Find an entry with assumption that the key is random access.
     /// Logarithmic complexity.
+    #[requires(self.is_sorted())]
+    #[ensures(
+        match result {
+            Entry::Occupied(OccupiedEntry {index, map, ..}) => @index < (@map.v).len(),
+            Entry::Vacant(VacantEntry { index, map, .. }) => @index <= (@map.v).len(),
+        }
+    )]
+    #[ensures((^self).is_sorted())]
     pub fn entry(&mut self, key: K) -> Entry<K, V> {
         match self.find_k(&key) {
             Ok(index) => Entry::Occupied(OccupiedEntry {
@@ -122,11 +98,20 @@ where
         }
     }
 
+    #[requires(self.is_sorted())]
+    //#[requires(
+    //    forall<ele: VecMapItem<K, V>> (@self.v).get(0) == Some(ele) ==>
+    //        ele.key.deep_model() <= key.deep_model()
+    //)]
+    #[requires(self.is_valid_keyref_lg(key_hint))]
+    #[ensures((^self).is_sorted())]
     pub fn entry_from_ref(&mut self, key_hint: KeyRef<K>, key: K) -> Entry<K, V> {
         debug_assert!(self.is_valid_keyref(&key_hint.as_ref()));
         let KeyRef { min_idx, .. } = key_hint;
+
+        #[invariant(t, true)]
         for i in min_idx..self.v.len() {
-            match self.v[i].key.cmp(&key) {
+            match self.v[i].0.cmp(&key) {
                 Ordering::Equal => {
                     return Entry::Occupied(OccupiedEntry {
                         map: self,
@@ -157,33 +142,19 @@ where
     /// Finds entry reference, either directly associated with `min_key_inclusive`, or the entry with the
     /// closest key (in terms of sorting order) greater than `min_key_inclusive`. Returns `None` if
     /// map does not contain entry with key greater or equal to `min_key_inclusive`.
+    #[requires(self.is_sorted())]
+    #[ensures(result == None ==> forall<i: Int> i >= 0 && i < (@self.v).len() ==>
+              self.key_seq()[i] < min_key_inclusive.deep_model())]
+    #[ensures(forall<mapping: _, i: Int> result == Some(mapping) && i >= 0 && i < @mapping.0.min_idx ==>
+              self.key_seq()[i] < min_key_inclusive.deep_model())]
+    #[ensures(forall<mapping: _, i: Int> result == Some(mapping) && i >= @mapping.0.min_idx && i < (@self.v).len() ==>
+              self.key_seq()[i] >= min_key_inclusive.deep_model())]
+    #[ensures(forall<mapping: _> result == Some(mapping)  ==>
+              (@self.v)[@mapping.0.min_idx].1 == *mapping.1)]
     pub fn find_random_mapping_after(&self, min_key_inclusive: K) -> Option<(KeyRef<&K>, &V)> {
-        //match self.find_k(&min_key_inclusive) {
-        //    Ok(index) => {
-        //        let VecMapItem { key, value } = &self.v[index];
-        //        Some((
-        //            KeyRef {
-        //                key,
-        //                min_idx: index,
-        //            },
-        //            value,
-        //        ))
-        //    }
-        //    Err(index) => self.v.get(index).map(move |VecMapItem { key, value }| {
-        //        assert!(key >= &min_key_inclusive);
-        //        (
-        //            KeyRef {
-        //                key,
-        //                min_idx: index,
-        //            },
-        //            value,
-        //        )
-        //    }),
-        //}
-
         match self.find_k(&min_key_inclusive) {
             Ok(index) => {
-                let VecMapItem { key, value } = &self.v[index];
+                let (key, value) = &self.v[index];
                 Some((
                     KeyRef {
                         key,
@@ -193,7 +164,7 @@ where
                 ))
             }
             Err(index) => match self.v.get(index) {
-                Some(VecMapItem { key, value }) => {
+                Some((key, value)) => {
                     assert!(key >= &min_key_inclusive);
                     Some((
                         KeyRef {
@@ -208,36 +179,70 @@ where
         }
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(exists<i: Int> i >= 0 && i < (@(^self).v).len() ==>
+              (^self).key_seq()[i] == key.deep_model() && (@(^self).v)[i].1 == value)]
+    #[ensures((^self).is_sorted())]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         match self.find_k(&key) {
-            Ok(index) => Some(std::mem::replace(&mut self.v[index].value, value)),
+            Ok(index) => Some(std::mem::replace(&mut self.v[index].1, value)),
             Err(index) => {
-                self.v.insert(index, VecMapItem { key, value });
+                self.insert_internal(index, key, value);
                 None
             }
         }
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(result == None ==>
+              !self.key_seq().contains(key.deep_model()) &&
+              *self == ^self)]
+    #[ensures(forall<v: V> result == Some(v) ==>
+              exists<i: Int> i >= 0 && i < (@self.v).len() ==>
+              self.key_seq()[i] == key.deep_model() && (@self.v)[i].1 == v &&
+              (@(^self).v) == (@self.v).subsequence(0, i).concat(
+                  (@self.v).subsequence(i + 1, (@self.v).len())
+              ))]
+    #[ensures((^self).is_sorted())]
     pub fn remove(&mut self, key: &K) -> Option<V> {
         match self.find_k(key) {
-            Ok(index) => Some(self.v.remove(index).value),
+            Ok(index) => Some(self.v.remove(index).1),
             Err(_) => None,
         }
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(result == None ==> !self.key_seq().contains(key.deep_model()))]
+    #[ensures(forall<v: _> result == Some(v) ==>
+              exists<i: Int> i >= 0 && i < (@self.v).len() ==>
+              self.key_seq()[i] == key.deep_model() && (@self.v)[i].1 == *v)]
     pub fn get(&self, key: &K) -> Option<&V> {
         match self.find_k(key) {
-            Ok(index) => Some(&self.v[index].value),
+            Ok(index) => Some(&self.v[index].1),
             Err(_) => None,
         }
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(result == self.key_seq().contains(key.deep_model()))]
     pub fn contains_key(&self, key: &K) -> bool {
         self.find_k(key).is_ok()
     }
 
     /// Produces the first mapping that follows the given key
     /// in the ascending order on keys.
+    #[requires(self.is_sorted())]
+    #[ensures(result == None ==>
+              forall<i: Int> i >= 0 && i < (@self.v).len() ==>
+              self.key_seq()[i] <= key.key.deep_model())]
+    #[ensures(forall<entry: _> result == Some(entry) ==>
+              exists<i: Int> i >= 0 && i < (@self.v).len() ==>
+              self.key_seq()[i] == entry.0.key.deep_model() &&
+              self.key_seq()[i] > key.key.deep_model() &&
+              (@self.v)[i].1 == *entry.1 &&
+              forall<j: Int> j >= 0 && j < i ==>
+              self.key_seq()[j] < entry.0.key.deep_model() &&
+              self.key_seq()[j] <= key.key.deep_model())]
     pub fn next_mapping(&self, key: KeyRef<&K>) -> Option<(KeyRef<&K>, &V)> {
         let from = if self.is_valid_keyref(&key) {
             key.min_idx
@@ -245,24 +250,44 @@ where
             0 // it's not, maybe it was produced by another vecmap
         };
 
+        let mut i = from;
+
+        //#[invariant(t, true)]
+        #[invariant(prev_less, forall<j: Int> j >= 0 && j < @i ==> self.key_seq()[j] <= key.key.deep_model())]
         for idx in from..self.v.len() {
-            if &self.v[idx].key > key.key {
-                let VecMapItem { key, value } = &self.v[idx];
+            i = idx;
+            if &self.v[idx].0 > key.key {
+                let (key, value) = &self.v[idx];
                 return Some((KeyRef { min_idx: idx, key }, value));
             }
         }
         None
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(result == self.is_valid_keyref_lg((*key).to_owned()))]
+    #[ensures(result ==> @key.min_idx < (@self.v).len())]
     fn is_valid_keyref(&self, key: &KeyRef<&K>) -> bool {
-        //self.v
-        //    .get(key.min_idx)
-        //    .filter(|VecMapItem { key: k, .. }| k <= key.key)
-        //    .is_some()
-
         match self.v.get(key.min_idx) {
-            Some(VecMapItem { key: k, .. }) if k <= key.key => true,
+            Some((k, _)) if k <= key.key => true,
             _ => false,
+        }
+    }
+
+    #[predicate]
+    #[requires(self.is_sorted())]
+    fn is_valid_keyref_lg(self, key: KeyRef<K>) -> bool {
+        pearlite! {
+            match (@self.v).get(@key.min_idx) {
+                Some((k, _)) => {
+                    if k.deep_model() <= key.key.deep_model() {
+                        true
+                    } else {
+                        false
+                    }
+                },
+                _ => false
+            }
         }
     }
 
@@ -271,21 +296,29 @@ where
         self.v.iter().map(|VecMapItem { key, value }| (key, value))
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(result == None ==> (@self.v).len() == 0)]
+    #[ensures(forall<entry: _> result == Some(entry) ==> (@self.v)[0] == ((*entry.0.key, *entry.1)))]
+    #[ensures(forall<entry: _> result == Some(entry) ==> @entry.0.min_idx == 0)]
+    #[ensures(forall<entry: _> result == Some(entry) ==>
+              forall<i: Int> i >= 0 && i < (@self.v).len() ==> self.key_seq()[i] >= entry.0.key.deep_model()
+    )]
     pub fn min_entry(&self) -> Option<(KeyRef<&K>, &V)> {
-        //self.v
-        //    .first()
-        //    .map(|VecMapItem { key, value }| (KeyRef { key, min_idx: 0 }, value))
-
         match self.v.first() {
-            Some(VecMapItem { key, value }) => Some((KeyRef { key, min_idx: 0 }, value)),
+            Some((key, value)) => Some((KeyRef { key, min_idx: 0 }, value)),
             None => None,
         }
     }
 
+    #[requires(self.is_sorted())]
+    #[ensures(result == None ==> (@self.v).len() == 0)]
+    #[ensures(forall<k: &K> result == Some(k) ==>
+              forall<i: Int> i >= 0 && i < (@self.v).len() ==>
+              self.key_seq()[i] <= k.deep_model()
+    )]
     pub fn max_key(&self) -> Option<&K> {
-        //self.v.last().map(|e| &e.key)
         match self.v.last() {
-            Some(e) => Some(&e.key),
+            Some(e) => Some(&e.0),
             None => None,
         }
     }
@@ -293,23 +326,79 @@ where
     /// Attempts to find the given `key`. If found, it returns `Ok` with the index of the key in the
     /// underlying `Vec`. Otherwise it returns `Err` with the index where a matching element could be
     /// inserted while maintaining sorted order.
+    #[requires(self.is_sorted())]
+    #[ensures(match result {
+        Ok(_) => self.key_seq().contains(key.deep_model()),
+        Err(_) => !self.key_seq().contains(key.deep_model()),
+    })]
+    #[ensures(forall<i: usize> result == Ok(i) ==> self.key_seq()[@i] == key.deep_model())]
+    #[ensures(forall<i: usize, j: Int> result == Err(i) ==> j >= @i && j < (@self.v).len() ==>
+              self.key_seq()[j] > key.deep_model())]
+    #[ensures(forall<i: usize, j: Int> result == Err(i) && j >= 0 && j < @i ==>
+              self.key_seq()[j] < key.deep_model())]
+    #[ensures(match result {
+        Ok(idx) => @idx < (@self.v).len(),
+        Err(idx) => @idx <= (@self.v).len(),
+    })]
     fn find_k(&self, key: &K) -> Result<usize, usize> {
-        //self.v
-        //    .binary_search_by_key(&key, |VecMapItem { key, .. }| key)
-        self.v.binary_search(&VecMapItem {
-            key: key.clone(),
-            value: V::default(),
-        })
+        let mut size = self.v.len();
+        let mut left = 0;
+        let mut right = size;
+        let mut mid;
+
+        #[invariant(size_bounds, @size >= 0 && @size <= (@self.v).len())]
+        #[invariant(left_bounds, @left >= 0 && @left <= (@self.v).len())]
+        #[invariant(right_bounds, @right >= 0 && @right <= (@self.v).len())]
+        #[invariant(mid_bounds, @left < @right ==> (@left + (@size / 2)) < (@self.v).len())]
+        #[invariant(right_gt_mid, @left < @right ==> @right > (@left + (@size / 2)))]
+        #[invariant(right_geq_key, forall<i: Int> i >= @right && i < (@self.v).len() ==>
+                    self.key_seq()[i] > key.deep_model())]
+        #[invariant(left_lt_key, forall<i: Int> i >= 0 && i < @left ==>
+                    self.key_seq()[i] < key.deep_model())]
+        while left < right {
+            mid = left + size / 2;
+
+            let cmp = self.v[mid].0.cmp(key);
+
+            match cmp {
+                Ordering::Less => left = mid + 1,
+                Ordering::Greater => right = mid,
+                Ordering::Equal => return Ok(mid),
+            }
+
+            size = right - left;
+        }
+        Err(left)
     }
 
     /// Directly insert into the underlying `Vec`. This does not maintain the sorting of elements
     /// by itself.
+    #[requires(@idx <= (@self.v).len())]
+    #[ensures((@(^self).v).len() == (@self.v).len() + 1)]
+    #[ensures(forall<i: Int> 0 <= i && i < @idx ==> (@(^self).v)[i] == (@self.v)[i])]
+    #[ensures((@(^self).v)[@idx] == (key, value))]
+    #[ensures(forall<i: Int> @idx < i && i < (@(^self).v).len() ==> (@(^self).v)[i] == (@self.v)[i - 1])]
+    #[ensures(self.is_sorted() && (@self.v).len() == 0 ==> (^self).is_sorted())]
+    #[ensures(self.is_sorted() && (@self.v).len() > 0 && @idx > 0 && @idx < (@self.v).len() &&
+              (@self.v)[@idx].0.deep_model() > key.deep_model() &&
+              (@self.v)[@idx - 1].0.deep_model() < key.deep_model() ==>
+              (^self).is_sorted()
+    )]
+    #[ensures(self.is_sorted() && (@self.v).len() > 0 && @idx == 0 &&
+              (@self.v)[@idx].0.deep_model() > key.deep_model() ==>
+              (^self).is_sorted()
+    )]
+    #[ensures(self.is_sorted() && (@self.v).len() > 0 && @idx == (@self.v).len() &&
+              (@self.v)[@idx - 1].0.deep_model() < key.deep_model() ==>
+              (^self).is_sorted()
+    )]
     fn insert_internal(&mut self, idx: usize, key: K, value: V) {
-        self.v.insert(idx, VecMapItem { key, value })
+        self.v.insert(idx, (key, value))
     }
 }
 
 impl<K: Clone + Eq + Ord, V: Clone> Clone for VecMap<K, V> {
+    #[ensures(result == *self)]
     fn clone(&self) -> Self {
         VecMap { v: self.v.clone() }
     }
@@ -323,6 +412,7 @@ impl<K: Ord + Eq + Debug, V: Debug> Debug for VecMap<K, V> {
 }
 
 impl<K: Ord + Eq, V> ::std::default::Default for VecMap<K, V> {
+    #[ensures(result.is_default())]
     fn default() -> Self {
         Self { v: Vec::new() }
     }
@@ -373,8 +463,13 @@ where
 
 impl<K, V> Entry<'_, K, V>
 where
-    K: Ord + Eq,
+    K: Ord + Eq + DeepModel,
+    K::DeepModelTy: OrdLogic,
 {
+    #[requires(match self {
+        Entry::Vacant(VacantEntry {map, ..}) => map.is_sorted(),
+        Entry::Occupied(OccupiedEntry {map, ..}) => map.is_sorted(),
+    })]
     pub fn keyref(&self) -> KeyRef<&K> {
         match self {
             Entry::Vacant(VacantEntry { key, index, .. }) => KeyRef {
@@ -391,28 +486,42 @@ where
 
 impl<K, V> VacantEntry<'_, K, V>
 where
-    K: Ord + Eq + Clone + DeepModel,
+    K: Ord + Eq + DeepModel,
     K::DeepModelTy: OrdLogic,
-    V: Default,
 {
-    /// Sets the value of the entry with the VacantEntry's key,
-    /// and returns a mutable reference to it.
+    /// Sets the value of the entry with the VacantEntry's key.
+    #[requires(self.map.is_sorted())]
+    #[requires(@self.index <= (@self.map.v).len())]
+    #[requires(forall<i: Int> i >= 0 && i < @self.index ==>
+               self.map.key_seq()[i] < self.key.deep_model())]
+    #[requires(forall<i: Int> i >= @self.index && i < (@self.map.v).len() ==>
+               self.map.key_seq()[i] > self.key.deep_model())]
+    #[ensures((^self.map).is_sorted())]
     pub fn insert(self, value: V) {
-        let index = self.index;
-        self.map.insert_internal(index, self.key, value)
+        self.map.insert_internal(self.index, self.key, value)
     }
 }
 
 impl<K, V> OccupiedEntry<'_, K, V>
 where
-    K: Ord + Eq,
+    K: Ord + Eq + DeepModel,
+    K::DeepModelTy: OrdLogic,
 {
-    pub fn replace(self, value: V) {
-        self.map.v[self.index].value = value;
+    #[requires(self.map.is_sorted())]
+    #[requires((@self.map.v).len() > @self.index)]
+    #[requires(self.map.key_seq()[@self.index] == self.key.deep_model())]
+    #[ensures((@(^self).map.v)[@self.index].1 == value)]
+    #[ensures((^self).map.is_sorted())]
+    pub fn replace(&mut self, value: V) {
+        self.map.v[self.index].1 = value;
     }
 
+    #[requires(self.map.is_sorted())]
+    #[requires((@self.map.v).len() > @self.index)]
+    #[requires(self.map.key_seq()[@self.index] == self.key.deep_model())]
+    #[ensures((^self).map.is_sorted())]
     pub fn get_mut(&mut self) -> &mut V {
-        &mut self.map.v[self.index].value
+        &mut self.map.v[self.index].1
     }
 }
 
@@ -427,6 +536,15 @@ pub struct KeyRef<K> {
     min_idx: usize,
 }
 
+impl<K: DeepModel> DeepModel for KeyRef<K> {
+    type DeepModelTy = (K::DeepModelTy, Int);
+
+    #[logic]
+    fn deep_model(self) -> Self::DeepModelTy {
+        pearlite! {(self.key.deep_model(), @self.min_idx)}
+    }
+}
+
 impl<K: Clone> KeyRef<&K> {
     #[inline]
     pub fn cloned(self) -> KeyRef<K> {
@@ -437,12 +555,24 @@ impl<K: Clone> KeyRef<&K> {
     }
 }
 
-impl<K> KeyRef<K> {
+impl<K: DeepModel> KeyRef<K> {
     #[inline]
+    #[ensures(self.deep_model() == result.deep_model())]
     pub fn as_ref(&self) -> KeyRef<&K> {
         KeyRef {
             min_idx: self.min_idx,
             key: &self.key,
+        }
+    }
+}
+
+impl<K: DeepModel> KeyRef<&K> {
+    #[logic]
+    #[ensures(self.deep_model() == result.deep_model())]
+    fn to_owned(self) -> KeyRef<K> {
+        KeyRef {
+            key: *self.key,
+            min_idx: self.min_idx,
         }
     }
 }
