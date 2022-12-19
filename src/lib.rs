@@ -22,6 +22,8 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#![feature(min_specialization)]
+
 use ::std::cmp::Ordering;
 
 #[cfg(not(feature = "contracts"))]
@@ -481,6 +483,17 @@ where
                 key,
             },
         }
+    }
+}
+
+#[trusted]
+impl<'a, K, V> Resolve for VacantEntry<'a, K, V>
+where
+    K: Eq + Ord,
+{
+    #[predicate]
+    fn resolve(self) -> bool {
+        self.map.resolve() && self.key.resolve()
     }
 }
 
