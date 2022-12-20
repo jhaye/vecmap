@@ -30,7 +30,7 @@ use ::std::cmp::Ordering;
 use ::std::fmt::{Debug, Display, Formatter};
 
 #[cfg(feature = "contracts")]
-use creusot_contracts::{Clone, *};
+use creusot_contracts::{invariant::Invariant, Clone, *};
 
 /// A sparse map representation over a totally ordered key type.
 ///
@@ -78,12 +78,10 @@ where
     /// Find an entry with assumption that the key is random access.
     /// Logarithmic complexity.
     #[requires(self.is_sorted())]
-    #[ensures(
-        match result {
-            Entry::Occupied(OccupiedEntry {index, map, ..}) => @index < (@map.v).len(),
-            Entry::Vacant(VacantEntry { index, map, .. }) => @index <= (@map.v).len(),
-        }
-    )]
+    #[ensures(forall<e: _> result == Entry::Occupied(e) ==> e.invariant())]
+    #[ensures(forall<e: _> result == Entry::Vacant(e) ==> e.invariant())]
+    #[ensures(forall<e: _> result == Entry::Occupied(e) ==> (^e.map).is_sorted())]
+    #[ensures(forall<e: _> result == Entry::Vacant(e) ==> (^e.map).is_sorted())]
     #[ensures((^self).is_sorted())]
     pub fn entry(&mut self, key: K) -> Entry<K, V> {
         match self.find_k(&key) {
@@ -101,11 +99,16 @@ where
     }
 
     #[requires(self.is_sorted())]
-    //#[requires(
-    //    forall<ele: VecMapItem<K, V>> (@self.v).get(0) == Some(ele) ==>
-    //        ele.key.deep_model() <= key.deep_model()
-    //)]
     #[requires(self.is_valid_keyref_lg(key_hint))]
+    #[requires(key_hint.key.deep_model() <= key.deep_model())]
+    #[ensures(match result {
+        Entry::Occupied(e) => e.invariant(),
+        Entry::Vacant(e) => e.invariant(),
+    })]
+    #[ensures(match result {
+        Entry::Occupied(OccupiedEntry {map, ..}) => (^map).is_sorted(),
+        Entry::Vacant(VacantEntry {map, .. }) => (^map).is_sorted(),
+    })]
     #[ensures((^self).is_sorted())]
     pub fn entry_from_ref(&mut self, key_hint: KeyRef<K>, key: K) -> Entry<K, V> {
         debug_assert!(self.is_valid_keyref(&key_hint.as_ref()));
@@ -269,9 +272,11 @@ where
     #[requires(self.is_sorted())]
     #[ensures(result == self.is_valid_keyref_lg((*key).to_owned()))]
     #[ensures(result ==> @key.min_idx < (@self.v).len())]
+    #[ensures(result ==> forall<i: Int> i >= 0 && i <= @key.min_idx ==>
+              self.key_seq()[i] <= key.key.deep_model())]
     fn is_valid_keyref(&self, key: &KeyRef<&K>) -> bool {
         match self.v.get(key.min_idx) {
-            Some((k, _)) if k <= key.key => true,
+            Some((k, _)) => k <= key.key,
             _ => false,
         }
     }
@@ -280,13 +285,9 @@ where
     #[requires(self.is_sorted())]
     fn is_valid_keyref_lg(self, key: KeyRef<K>) -> bool {
         pearlite! {
-            match (@self.v).get(@key.min_idx) {
-                Some((k, _)) => {
-                    if k.deep_model() <= key.key.deep_model() {
-                        true
-                    } else {
-                        false
-                    }
+            match self.key_seq().get(@key.min_idx) {
+                Some(k) => {
+                    k <= key.key.deep_model()
                 },
                 _ => false
             }
@@ -497,14 +498,26 @@ where
     }
 }
 
+impl<K, V> Invariant for VacantEntry<'_, K, V>
+where
+    K: Eq + Ord + DeepModel,
+    K::DeepModelTy: OrdLogic,
+{
+    #[predicate]
+    fn invariant(self) -> bool {
+        pearlite! {
+            self.map.is_sorted() && @self.index <= (@self.map.v).len()
+        }
+    }
+}
+
 impl<K, V> VacantEntry<'_, K, V>
 where
     K: Ord + Eq + DeepModel,
     K::DeepModelTy: OrdLogic,
 {
     /// Sets the value of the entry with the VacantEntry's key.
-    #[requires(self.map.is_sorted())]
-    #[requires(@self.index <= (@self.map.v).len())]
+    #[requires(self.invariant())]
     #[requires(forall<i: Int> i >= 0 && i < @self.index ==>
                self.map.key_seq()[i] < self.key.deep_model())]
     #[requires(forall<i: Int> i >= @self.index && i < (@self.map.v).len() ==>
@@ -515,24 +528,35 @@ where
     }
 }
 
+impl<K, V> Invariant for OccupiedEntry<'_, K, V>
+where
+    K: Eq + Ord + DeepModel,
+    K::DeepModelTy: OrdLogic,
+{
+    #[predicate]
+    fn invariant(self) -> bool {
+        pearlite! {
+            self.map.is_sorted() &&
+                (@self.map.v).len() > @self.index &&
+                self.map.key_seq()[@self.index] == self.key.deep_model()
+        }
+    }
+}
+
 impl<K, V> OccupiedEntry<'_, K, V>
 where
     K: Ord + Eq + DeepModel,
     K::DeepModelTy: OrdLogic,
 {
-    #[requires(self.map.is_sorted())]
-    #[requires((@self.map.v).len() > @self.index)]
-    #[requires(self.map.key_seq()[@self.index] == self.key.deep_model())]
+    #[requires(self.invariant())]
     #[ensures((@(^self).map.v)[@self.index].1 == value)]
-    #[ensures((^self).map.is_sorted())]
+    #[ensures((^self).invariant())]
     pub fn replace(&mut self, value: V) {
         self.map.v[self.index].1 = value;
     }
 
-    #[requires(self.map.is_sorted())]
-    #[requires((@self.map.v).len() > @self.index)]
-    #[requires(self.map.key_seq()[@self.index] == self.key.deep_model())]
-    #[ensures((^self).map.is_sorted())]
+    #[requires(self.invariant())]
+    #[ensures((^self).invariant())]
     pub fn get_mut(&mut self) -> &mut V {
         &mut self.map.v[self.index].1
     }
