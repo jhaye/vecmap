@@ -482,7 +482,7 @@ where
 }
 
 #[trusted]
-impl<'a, K, V> Resolve for VacantEntry<'a, K, V>
+impl<K, V> Resolve for VacantEntry<'_, K, V>
 where
     K: Eq + Ord,
 {
