@@ -77,12 +77,11 @@ where
 
     /// Find an entry with assumption that the key is random access.
     /// Logarithmic complexity.
-    #[requires(self.is_sorted())]
+    #[maintains((mut self).is_sorted())]
     #[ensures(forall<e: _> result == Entry::Occupied(e) ==> e.invariant())]
     #[ensures(forall<e: _> result == Entry::Vacant(e) ==> e.invariant())]
     #[ensures(forall<e: _> result == Entry::Occupied(e) ==> (^e.map).is_sorted())]
     #[ensures(forall<e: _> result == Entry::Vacant(e) ==> (^e.map).is_sorted())]
-    #[ensures((^self).is_sorted())]
     pub fn entry(&mut self, key: K) -> Entry<K, V> {
         match self.find_k(&key) {
             Ok(index) => Entry::Occupied(OccupiedEntry {
@@ -98,7 +97,7 @@ where
         }
     }
 
-    #[requires(self.is_sorted())]
+    #[maintains((mut self).is_sorted())]
     #[requires(self.is_valid_keyref_lg(key_hint))]
     #[requires(key_hint.key.deep_model() <= key.deep_model())]
     #[ensures(match result {
@@ -109,7 +108,6 @@ where
         Entry::Occupied(OccupiedEntry {map, ..}) => (^map).is_sorted(),
         Entry::Vacant(VacantEntry {map, .. }) => (^map).is_sorted(),
     })]
-    #[ensures((^self).is_sorted())]
     pub fn entry_from_ref(&mut self, key_hint: KeyRef<K>, key: K) -> Entry<K, V> {
         debug_assert!(self.is_valid_keyref(&key_hint.as_ref()));
         let KeyRef { min_idx, .. } = key_hint;
@@ -184,10 +182,9 @@ where
         }
     }
 
-    #[requires(self.is_sorted())]
+    #[maintains((mut self).is_sorted())]
     #[ensures(exists<i: Int> i >= 0 && i < (@(^self).v).len() ==>
               (^self).key_seq()[i] == key.deep_model() && (@(^self).v)[i].1 == value)]
-    #[ensures((^self).is_sorted())]
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         match self.find_k(&key) {
             Ok(index) => Some(std::mem::replace(&mut self.v[index].1, value)),
@@ -198,7 +195,7 @@ where
         }
     }
 
-    #[requires(self.is_sorted())]
+    #[maintains((mut self).is_sorted())]
     #[ensures(result == None ==>
               !self.key_seq().contains(key.deep_model()) &&
               *self == ^self)]
@@ -208,7 +205,6 @@ where
               (@(^self).v) == (@self.v).subsequence(0, i).concat(
                   (@self.v).subsequence(i + 1, (@self.v).len())
               ))]
-    #[ensures((^self).is_sorted())]
     pub fn remove(&mut self, key: &K) -> Option<V> {
         match self.find_k(key) {
             Ok(index) => Some(self.v.remove(index).1),
@@ -546,15 +542,13 @@ where
     K: Ord + Eq + DeepModel,
     K::DeepModelTy: OrdLogic,
 {
-    #[requires(self.invariant())]
+    #[maintains((mut self).invariant())]
     #[ensures((@(^self).map.v)[@self.index].1 == value)]
-    #[ensures((^self).invariant())]
     pub fn replace(&mut self, value: V) {
         self.map.v[self.index].1 = value;
     }
 
-    #[requires(self.invariant())]
-    #[ensures((^self).invariant())]
+    #[maintains((mut self).invariant())]
     pub fn get_mut(&mut self) -> &mut V {
         &mut self.map.v[self.index].1
     }
