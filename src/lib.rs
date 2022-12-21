@@ -77,11 +77,9 @@ where
 
     /// Find an entry with assumption that the key is random access.
     /// Logarithmic complexity.
-    #[maintains((mut self).is_sorted())]
+    #[requires(self.is_sorted())]
     #[ensures(forall<e: _> result == Entry::Occupied(e) ==> e.invariant())]
     #[ensures(forall<e: _> result == Entry::Vacant(e) ==> e.invariant())]
-    #[ensures(forall<e: _> result == Entry::Occupied(e) ==> (^e.map).is_sorted())]
-    #[ensures(forall<e: _> result == Entry::Vacant(e) ==> (^e.map).is_sorted())]
     pub fn entry(&mut self, key: K) -> Entry<K, V> {
         match self.find_k(&key) {
             Ok(index) => Entry::Occupied(OccupiedEntry {
@@ -97,17 +95,11 @@ where
         }
     }
 
-    #[maintains((mut self).is_sorted())]
+    #[requires(self.is_sorted())]
     #[requires(self.is_valid_keyref_lg(key_hint))]
     #[requires(key_hint.key.deep_model() <= key.deep_model())]
-    #[ensures(match result {
-        Entry::Occupied(e) => e.invariant(),
-        Entry::Vacant(e) => e.invariant(),
-    })]
-    #[ensures(match result {
-        Entry::Occupied(OccupiedEntry {map, ..}) => (^map).is_sorted(),
-        Entry::Vacant(VacantEntry {map, .. }) => (^map).is_sorted(),
-    })]
+    #[ensures(forall<e: _> result == Entry::Occupied(e) ==> e.invariant())]
+    #[ensures(forall<e: _> result == Entry::Vacant(e) ==> e.invariant())]
     pub fn entry_from_ref(&mut self, key_hint: KeyRef<K>, key: K) -> Entry<K, V> {
         debug_assert!(self.is_valid_keyref(&key_hint.as_ref()));
         let KeyRef { min_idx, .. } = key_hint;
