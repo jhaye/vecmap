@@ -255,13 +255,11 @@ where
             0 // it's not, maybe it was produced by another vecmap
         };
 
-        let mut i = from;
-
-        //#[invariant(t, true)]
-        #[invariant(prev_less, forall<j: Int> j >= 0 && j < @i ==> self.key_seq()[j] <= key.key.deep_model())]
+        //for idx in from..self.v.len() {
+        #[invariant(prev_leq, forall<j: Int> j >= 0 && j < produced.len() + @from ==>
+                    self.key_seq()[j] <= key.key.deep_model())]
         for idx in from..self.v.len() {
-            i = idx;
-            if &self.v[idx].0 > key.key {
+            if self.v[idx].0 > *key.key {
                 let (key, value) = &self.v[idx];
                 return Some((KeyRef { min_idx: idx, key }, value));
             }
