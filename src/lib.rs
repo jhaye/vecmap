@@ -22,13 +22,13 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+//! This is a formally verified implementation of a sparse map that uses [Vec] underneath.
+//! Entries are retained in sorted order by key to facilitate fast search.
+
 use ::std::cmp::Ordering;
 use ::std::fmt::{Debug, Display, Formatter};
 
 /// A sparse map representation over a totally ordered key type.
-///
-/// Used in [crate::ExecutableReactions]
-///
 pub struct VecMap<K, V>
 where
     K: Eq + Ord,
@@ -61,6 +61,15 @@ where
         }
     }
 
+    /// Find the entry matching `key`. Use `key_hint` to accelerate search.
+    /// The function will use the provided hint to skip items before it.\
+    /// **Note**: This function makes two assumptions about your input:
+    /// - `key_hint` is valid, i.e. the underlying key is in the map and since extracting
+    ///   the reference, no item has been removed from the map
+    /// - `key_hint.key <= key`
+    ///
+    /// If either of these assumptions is violated, you might obtain an entry which allows
+    /// destroying the well-kept order of the items.
     pub fn entry_from_ref(&mut self, key_hint: KeyRef<K>, key: K) -> Entry<K, V> {
         debug_assert!(self.is_valid_keyref(&key_hint.as_ref()));
         let KeyRef { min_idx, .. } = key_hint;
@@ -124,6 +133,8 @@ where
         }
     }
 
+    /// Insert `value` for `key` in the map. If `key` is already contained, the function
+    /// replaces the previously held value and returns it.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         match self.find_k(&key) {
             Ok(index) => Some(std::mem::replace(&mut self.v[index].1, value)),
@@ -134,6 +145,8 @@ where
         }
     }
 
+    /// Removes the item with `key` and returns its value. If no such item exists,
+    /// it does nothing.
     pub fn remove(&mut self, key: &K) -> Option<V> {
         match self.find_k(key) {
             Ok(index) => Some(self.v.remove(index).1),
@@ -141,6 +154,7 @@ where
         }
     }
 
+    /// Get the value associated with `key`, if it exists.
     pub fn get(&self, key: &K) -> Option<&V> {
         match self.find_k(key) {
             Ok(index) => Some(&self.v[index].1),
@@ -148,12 +162,13 @@ where
         }
     }
 
+    /// Checks if `key` is contained in the map.
     pub fn contains_key(&self, key: &K) -> bool {
         self.find_k(key).is_ok()
     }
 
     /// Produces the first mapping that follows the given key
-    /// in the ascending order on keys.
+    /// in the ascending order of keys.
     pub fn next_mapping(&self, key: KeyRef<&K>) -> Option<(KeyRef<&K>, &V)> {
         let from = if self.is_valid_keyref(&key) {
             key.min_idx
@@ -177,10 +192,12 @@ where
         }
     }
 
+    /// Iterate over all key-value paris in the map.
     pub fn iter(&self) -> impl Iterator<Item = &(K, V)> + '_ {
         self.v.iter()
     }
 
+    /// Obtain keyref-value pair of the item with the smallest key, unless the map is empty.
     pub fn min_entry(&self) -> Option<(KeyRef<&K>, &V)> {
         match self.v.first() {
             Some((key, value)) => Some((KeyRef { key, min_idx: 0 }, value)),
@@ -188,6 +205,7 @@ where
         }
     }
 
+    /// Obtain the key of the item with the greatest key, unless the map is empty.
     pub fn max_key(&self) -> Option<&K> {
         match self.v.last() {
             Some(e) => Some(&e.0),
@@ -309,10 +327,12 @@ impl<K, V> OccupiedEntry<'_, K, V>
 where
     K: Ord + Eq,
 {
+    /// Replaces the entry's value with `value`.
     pub fn replace(&mut self, value: V) {
         self.map.v[self.index].1 = value;
     }
 
+    /// Gets the mutable ref to the entry's value.
     pub fn get_mut(&mut self) -> &mut V {
         &mut self.map.v[self.index].1
     }

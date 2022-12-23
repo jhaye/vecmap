@@ -22,6 +22,9 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+//! This is a formally verified implementation of a sparse map that uses [Vec] underneath.
+//! Entries are retained in sorted order by key to facilitate fast search.
+
 #![feature(min_specialization)]
 
 use ::std::cmp::Ordering;
@@ -32,9 +35,6 @@ use ::std::fmt::{Debug, Display, Formatter};
 use creusot_contracts::{invariant::Invariant, Clone, *};
 
 /// A sparse map representation over a totally ordered key type.
-///
-/// Used in [crate::ExecutableReactions]
-///
 pub struct VecMap<K, V>
 where
     K: Eq + Ord,
@@ -94,6 +94,15 @@ where
         }
     }
 
+    /// Find the entry matching `key`. Use `key_hint` to accelerate search.
+    /// The function will use the provided hint to skip items before it.\
+    /// **Note**: This function makes two assumptions about your input:
+    /// - `key_hint` is valid, i.e. the underlying key is in the map and since extracting
+    ///   the reference, no item has been removed from the map
+    /// - `key_hint.key <= key`
+    ///
+    /// If either of these assumptions is violated, you might obtain an entry which allows
+    /// destroying the well-kept order of the items.
     #[requires(self.is_sorted())]
     #[requires(self.is_valid_keyref_lg(key_hint))]
     #[requires(key_hint.key.deep_model() <= key.deep_model())]
@@ -172,6 +181,8 @@ where
         }
     }
 
+    /// Insert `value` for `key` in the map. If `key` is already contained, the function
+    /// replaces the previously held value and returns it.
     #[maintains((mut self).is_sorted())]
     #[ensures(exists<i: Int> i >= 0 && i < (@(^self).v).len() ==>
               (^self).key_seq()[i] == key.deep_model() && (@(^self).v)[i].1 == value)]
@@ -185,6 +196,8 @@ where
         }
     }
 
+    /// Removes the item with `key` and returns its value. If no such item exists,
+    /// it does nothing.
     #[maintains((mut self).is_sorted())]
     #[ensures(result == None ==>
               !self.key_seq().contains(key.deep_model()) &&
@@ -202,6 +215,7 @@ where
         }
     }
 
+    /// Get the value associated with `key`, if it exists.
     #[requires(self.is_sorted())]
     #[ensures(result == None ==> !self.key_seq().contains(key.deep_model()))]
     #[ensures(forall<v: _> result == Some(v) ==>
@@ -214,6 +228,7 @@ where
         }
     }
 
+    /// Checks if `key` is contained in the map.
     #[requires(self.is_sorted())]
     #[ensures(result == self.key_seq().contains(key.deep_model()))]
     pub fn contains_key(&self, key: &K) -> bool {
@@ -221,7 +236,7 @@ where
     }
 
     /// Produces the first mapping that follows the given key
-    /// in the ascending order on keys.
+    /// in the ascending order of keys.
     #[requires(self.is_sorted())]
     #[ensures(result == None ==>
               forall<i: Int> i >= 0 && i < (@self.v).len() ==>
@@ -277,11 +292,13 @@ where
         }
     }
 
+    /// Iterate over all key-value paris in the map.
     #[cfg(not(feature = "contracts"))]
     pub fn iter(&self) -> impl Iterator<Item = &(K, V)> + '_ {
         self.v.iter()
     }
 
+    /// Obtain keyref-value pair of the item with the smallest key, unless the map is empty.
     #[requires(self.is_sorted())]
     #[ensures(result == None ==> (@self.v).len() == 0)]
     #[ensures(forall<entry: _> result == Some(entry) ==> (@self.v)[0] == ((*entry.0.key, *entry.1)))]
@@ -296,6 +313,7 @@ where
         }
     }
 
+    /// Obtain the key of the item with the greatest key, unless the map is empty.
     #[requires(self.is_sorted())]
     #[ensures(result == None ==> (@self.v).len() == 0)]
     #[ensures(forall<k: &K> result == Some(k) ==>
@@ -530,12 +548,14 @@ where
     K: Ord + Eq + DeepModel,
     K::DeepModelTy: OrdLogic,
 {
+    /// Replaces the entry's value with `value`.
     #[maintains((mut self).invariant())]
     #[ensures((@(^self).map.v)[@self.index].1 == value)]
     pub fn replace(&mut self, value: V) {
         self.map.v[self.index].1 = value;
     }
 
+    /// Gets the mutable ref to the entry's value.
     #[maintains((mut self).invariant())]
     pub fn get_mut(&mut self) -> &mut V {
         &mut self.map.v[self.index].1
