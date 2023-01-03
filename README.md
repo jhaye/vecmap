@@ -28,7 +28,7 @@ for Creusot to work.
 ### Creusot
 
 For verfication with Creusot the following things are needed:
-- [Rust via `rustup`](https://www.rust-lang.org/tools/install)
+- [Rust](https://www.rust-lang.org/tools/install) via `rustup`
 - [Creusot](https://github.com/xldenis/creusot)
    - follow the instructions in the [Readme](https://github.com/xldenis/creusot#installing-creusot-as-a-user)
 - Make
