@@ -524,7 +524,8 @@ where
                self.map.key_seq()[i] > self.key.deep_model())]
     #[ensures((^self.map).is_sorted())]
     pub fn insert(self, value: V) {
-        self.map.insert_internal(self.index, self.key, value)
+        self.map.insert_internal(self.index, self.key, value);
+        proof_assert!(self.invariant());
     }
 }
 
